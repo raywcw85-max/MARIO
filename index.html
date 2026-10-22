@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="zh-HK">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>Super Mario Phaser - 豬仔手機版</title>
+    <link rel="icon" type="image/x-icon" href="assets/favicon.png">
+    <!-- 引入 Phaser 遊戲引擎（本地版本，離線亦可運行） -->
+    <script src="javascript/lib/phaser.min.js"></script>
+    <style>
+        * {
+            box-sizing: border-box;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            background-color: #000;
+            overflow: hidden;
+            position: fixed;
+        }
+        /* 遊戲畫面居中適應（id 必須與 game.js 的 parent 設定一致） */
+        #game {
+            width: 100vw;
+            height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+        canvas {
+            max-width: 100%;
+            max-height: 100%;
+            object-fit: contain;
+        }
+        /* 手機虛擬手掣樣式 */
+        .virtual-gamepad {
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none; /* 穿透點擊 */
+            z-index: 9999;
+        }
+        .btn {
+            position: absolute;
+            background: rgba(255, 255, 255, 0.25);
+            border: 3px solid rgba(255, 255, 255, 0.5);
+            border-radius: 50%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            color: white;
+            font-weight: bold;
+            font-family: Arial, sans-serif;
+            font-size: 24px;
+            pointer-events: auto; /* 允許觸控 */
+            touch-action: none;   /* 阻止雙擊縮放 */
+            -webkit-tap-highlight-color: transparent;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.5);
+        }
+        .btn:active {
+            background: rgba(255, 255, 255, 0.5);
+            transform: scale(0.9);
+        }
+        /* D-Pad 方向鍵（左下角） */
+        #btn-left {
+            bottom: 30px;
+            left: 30px;
+            width: 80px;
+            height: 80px;
+        }
+        #btn-right {
+            bottom: 30px;
+            left: 130px;
+            width: 80px;
+            height: 80px;
+        }
+        /* 下蹲/下水管（中間/左側偏下） */
+        #btn-down {
+            bottom: 120px;
+            left: 80px;
+            width: 70px;
+            height: 70px;
+            font-size: 18px;
+        }
+        /* 動作鍵（右下角） */
+        #btn-b { /* 衝刺 / 發火球 */
+            bottom: 30px;
+            right: 130px;
+            width: 80px;
+            height: 80px;
+            background: rgba(254, 18, 18, 0.4);
+            border-color: rgba(254, 18, 18, 0.6);
+        }
+        #btn-a { /* 跳躍 */
+            bottom: 75px;
+            right: 30px;
+            width: 85px;
+            height: 85px;
+            background: rgba(18, 118, 254, 0.4);
+            border-color: rgba(18, 118, 254, 0.6);
+        }
+        /* 暫停 / 選擇（頂部） */
+        .btn-small {
+            position: absolute;
+            top: 20px;
+            background: rgba(255,255,255,0.15);
+            border: 1px solid rgba(255,255,255,0.3);
+            border-radius: 5px;
+            color: #fff;
+            padding: 5px 12px;
+            font-size: 12px;
+            font-family: monospace;
+            pointer-events: auto;
+            touch-action: none;
+        }
+        #btn-select { left: calc(50% - 70px); }
+        #btn-start { left: calc(50% + 10px); }
+
+        /* 電腦瀏覽器隱藏，手機才顯示手掣 */
+        @media (pointer: fine) {
+            .virtual-gamepad {
+                display: none;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div id="game"></div>
+
+    <!-- 虛擬手掣 HTML -->
+    <div class="virtual-gamepad">
+        <div class="btn" id="btn-left">◀</div>
+        <div class="btn" id="btn-right">▶</div>
+        <div class="btn" id="btn-down">▼</div>
+        <div class="btn" id="btn-b">B</div>
+        <div class="btn" id="btn-a">A</div>
+        <div class="btn-small" id="btn-select">SELECT</div>
+        <div class="btn-small" id="btn-start">START</div>
+    </div>
+
+    <!-- 載入遊戲邏輯：game.js 依賴以下模組，載入順序不可更改 -->
+    <script src="javascript/game.js"></script>
+    <script src="javascript/game/animations.js"></script>
+    <script src="javascript/game/blocks.js"></script>
+    <script src="javascript/game/strucutres.js"></script>
+    <script src="javascript/game/settings.js"></script>
+    <script src="javascript/game/fireball.js"></script>
+    <script src="javascript/game/player-control.js"></script>
+    <script src="javascript/game/hud-control.js"></script>
+    <script src="javascript/game/entities-control.js"></script>
+    <script src="javascript/helpers/screenshot.js"></script>
+    <!-- html2canvas：截圖功能（非阻塞載入，離線時只會令截圖失效） -->
+    <script async src="https://html2canvas.hertzen.com/dist/html2canvas.min.js"></script>
+
+    <script>
+        // --- 核心：模擬鍵盤事件讓手機觸控對接遊戲 ---
+        // keyCode 必須與 game.js createControls() 的預設值一致：
+        // JUMP=SPACE(32) / DOWN=S(83) / LEFT=A(65) / RIGHT=D(68) / FIRE=Q(81) / PAUSE=ESC(27)
+        const keyMap = {
+            'btn-left': { key: 'a', code: 'KeyA', keyCode: 65 },
+            'btn-right': { key: 'd', code: 'KeyD', keyCode: 68 },
+            'btn-down': { key: 's', code: 'KeyS', keyCode: 83 },
+            'btn-a': { key: ' ', code: 'Space', keyCode: 32 },      // A: 跳躍
+            'btn-b': { key: 'q', code: 'KeyQ', keyCode: 81 },       // B: 衝刺 / 火球
+            'btn-start': { key: 'Escape', code: 'Escape', keyCode: 27 } // START: 暫停
+        };
+
+        function simulateKeyEvent(type, mapping) {
+            if (!mapping) return;
+            const event = new KeyboardEvent(type, {
+                key: mapping.key,
+                code: mapping.code,
+                keyCode: mapping.keyCode,
+                which: mapping.keyCode,
+                bubbles: true,
+                cancelable: true
+            });
+            // Phaser 預設在 window 上監聽鍵盤事件
+            window.dispatchEvent(event);
+        }
+
+        // SELECT：開啟 / 關閉遊戲內設定選單（需在關卡開始後）
+        function toggleSettingsMenu() {
+            if (typeof game === 'undefined' || !game.scene) return;
+            const scene = game.scene.getScene('level-1');
+            if (!scene || !scene.scene.isActive()) return;
+            if (!levelStarted || gameOver || gameWinned) return;
+            if (scene.settingsMenuOpen) {
+                hideSettings.call(scene);
+            } else {
+                showSettings.call(scene);
+            }
+        }
+
+        // 監聽所有觸控掣
+        Object.keys(keyMap).forEach(btnId => {
+            const btn = document.getElementById(btnId);
+            if (!btn) return;
+
+            // 支援多點觸控 (Multi-touch)
+            btn.addEventListener('touchstart', (e) => {
+                e.preventDefault();
+                simulateKeyEvent('keydown', keyMap[btnId]);
+                btn.style.opacity = '0.5';
+            }, { passive: false });
+
+            btn.addEventListener('touchend', (e) => {
+                e.preventDefault();
+                simulateKeyEvent('keyup', keyMap[btnId]);
+                btn.style.opacity = '';
+            }, { passive: false });
+
+            btn.addEventListener('touchcancel', (e) => {
+                e.preventDefault();
+                simulateKeyEvent('keyup', keyMap[btnId]);
+                btn.style.opacity = '';
+            }, { passive: false });
+        });
+
+        const selectBtn = document.getElementById('btn-select');
+        if (selectBtn) {
+            selectBtn.addEventListener('touchstart', (e) => {
+                e.preventDefault();
+                toggleSettingsMenu();
+                selectBtn.style.opacity = '0.5';
+            }, { passive: false });
+            selectBtn.addEventListener('touchend', (e) => {
+                e.preventDefault();
+                selectBtn.style.opacity = '';
+            }, { passive: false });
+        }
+
+        // 阻擋手機手勢避免影響遊戲體驗
+        document.addEventListener('touchmove', (e) => {
+            if (e.scale !== 1) { e.preventDefault(); } // 禁放大
+        }, { passive: false });
+    </script>
+</body>
+</html>
